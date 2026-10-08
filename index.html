@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Sektor-Monitor">
+<meta name="robots" content="noindex">
+<title>Sektor-Monitor</title>
+<!--
+  Sektor-Monitor Web v0.3.0
+  Zeigt, welche US-Sektoren den S&P 500 heute bewegen.
+    Veraenderung = Tagesveraenderung des Sektors in Prozent
+    Beitrag      = Veraenderung x Gewicht des Sektors im Index (Prozentpunkte)
+  Kurse: Finnhub (finnhub.io), direkt aus dem Browser. Der Zugangsschluessel wird
+  einmal je Geraet eingegeben und nur im Browser dieses Geraets gespeichert.
+  Sektoren ueber die SPDR-Sektor-ETFs, Index ueber den ETF SPY.
+  Gewichte: unten im Skript, Abschnitt GEWICHTE.
+-->
+<style>
+:root{
+  --bg:#f6f7f5; --flaeche:#ffffff; --text:#1b211e; --leise:#48524d; --linie:#dfe4e0;
+  --plus:#1f7a4d; --minus:#b3372f; --spur:#eceeeb; --warn:#8a5a00; --warnbg:#fdf3d9;
+  --zahl: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --schrift: -apple-system, "Helvetica Neue", "Segoe UI", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#131715; --flaeche:#1b201d; --text:#e8ece9; --leise:#98a39d; --linie:#2c3430;
+    --plus:#4cc38a; --minus:#f0786e; --spur:#232a26; --warn:#f2c661; --warnbg:#3a2f12;
+    color-scheme: dark;
+  }
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--text);font:17px/1.45 var(--schrift);
+  padding:env(safe-area-inset-top,0) env(safe-area-inset-right,0) env(safe-area-inset-bottom,0) env(safe-area-inset-left,0)}
+.rahmen{max-width:1120px;margin:0 auto;padding:16px}
+header{display:flex;flex-wrap:wrap;gap:8px 24px;align-items:baseline;justify-content:space-between}
+h1{font-size:22px;margin:0;font-weight:650}
+.status{color:var(--leise);font-size:15px}
+.punkt{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--leise);margin-right:6px}
+.punkt.offen{background:var(--plus)}
+.hinweis{background:var(--warnbg);color:var(--warn);padding:10px 14px;border-radius:6px;margin-top:12px;font-size:16px}
+.index{display:flex;flex-wrap:wrap;gap:4px 20px;align-items:baseline;margin:16px 0 4px}
+.index .gross{font:700 34px/1.1 var(--zahl)}
+.index .neben{color:var(--text);font-size:16px}
+.leiste{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;margin:12px 0 8px}
+.knoepfe{display:flex;gap:8px;flex-wrap:wrap}
+button{font:inherit;font-size:15px;color:var(--text);background:var(--flaeche);border:1px solid var(--linie);
+  border-radius:6px;padding:6px 10px;cursor:pointer}
+button.haupt{background:var(--plus);color:#fff;border-color:var(--plus);font-weight:600;padding:9px 16px}
+button:focus-visible,input:focus-visible{outline:2px solid var(--plus);outline-offset:2px}
+.tafel{background:var(--flaeche);border:1px solid var(--linie);border-radius:8px;overflow:hidden}
+.zeile{display:grid;grid-template-columns:minmax(150px,1.2fr) 70px 1.6fr 1.6fr;gap:12px 36px;align-items:center;
+  padding:9px 16px;border-top:1px solid var(--linie)}
+.zeile:first-child{border-top:0}
+.zeile.kopf{color:var(--text);font-size:13.5px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding-block:11px}
+.zeile.idx{font-weight:650;border-top:2px solid var(--text)}
+.name{min-width:0;font-weight:550}
+.name small{color:var(--leise);font-family:var(--zahl);font-size:13.5px;margin-left:8px;font-weight:400}
+.gew{font:600 15.5px var(--zahl);color:var(--text);text-align:right}
+.balken{display:grid;grid-template-columns:1fr 92px;gap:12px;align-items:center;min-width:0}
+.spur{position:relative;height:18px;background:var(--spur);border-radius:3px}
+.spur::after{content:"";position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--leise);opacity:.6}
+.fuell{position:absolute;top:0;bottom:0;border-radius:2px;transition:width .4s}
+.fuell.plus{background:var(--plus);left:50%}
+.fuell.minus{background:var(--minus);right:50%}
+.wert{font:650 15.5px var(--zahl);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.wert.plus{color:var(--plus)} .wert.minus{color:var(--minus)}
+.fehler{color:var(--warn);font-size:13.5px}
+footer{color:var(--leise);font-size:14.5px;margin-top:12px;display:grid;gap:4px}
+.karte{background:var(--flaeche);border:1px solid var(--linie);border-radius:8px;padding:20px;margin-top:20px;max-width:640px}
+.karte h2{font-size:19px;margin:0 0 8px}
+.karte p{margin:0 0 14px;color:var(--leise);font-size:16px}
+.karte label{display:block;font-weight:600;margin-bottom:6px}
+.karte input{font:16px var(--zahl);width:100%;padding:10px;border:1px solid var(--linie);border-radius:6px;
+  background:var(--bg);color:var(--text);margin-bottom:14px}
+@media (max-width:640px){
+  .zeile{grid-template-columns:1fr 70px;gap:4px 8px}
+  .zeile .balken{grid-column:1 / -1}
+  .zeile.kopf .balken{display:none}
+  .balken::before{font-size:13px;color:var(--leise);grid-column:1 / -1;margin-bottom:-4px}
+  .balken.v::before{content:"Veränderung"} .balken.b::before{content:"Beitrag"}
+}
+@media (prefers-reduced-motion: reduce){.fuell{transition:none}}
+</style>
+</head>
+<body>
+<div class="rahmen">
+  <header>
+    <h1>Sektor-Monitor</h1>
+    <div class="status"><span id="punkt" class="punkt"></span><span id="status">Noch kein Abruf</span></div>
+  </header>
+  <div id="hinweis" class="hinweis" hidden></div>
+
+  <form id="einrichtung" class="karte" hidden>
+    <h2>Einmalige Einrichtung auf diesem Gerät</h2>
+    <p>Die Seite holt die Kurse direkt bei Finnhub. Dafür braucht sie deinen Finnhub-Zugangsschlüssel (im Finnhub-Dashboard unter „API Key“). Er wird nur im Browser dieses Geräts gespeichert.</p>
+    <label for="schluessel">Finnhub-Zugangsschlüssel</label>
+    <input id="schluessel" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+    <button class="haupt" type="submit">Speichern und starten</button>
+  </form>
+
+  <div id="inhalt" hidden>
+    <div class="index">
+      <span class="neben">S&amp;P 500 (über SPY)</span>
+      <span id="idxv" class="gross">–</span>
+      <span id="idxs" class="neben"></span>
+      <span id="summe" class="neben"></span>
+    </div>
+    <div class="leiste">
+      <span class="status" id="markt"></span>
+      <span class="knoepfe">
+        <button id="sort" type="button">Sortierung: nach Beitrag</button>
+        <button id="neu" type="button">Schlüssel ändern</button>
+      </span>
+    </div>
+    <div class="tafel" id="tafel"></div>
+    <footer>
+      <div><b>Veränderung</b> = Tagesveränderung des Sektors in Prozent. <b>Beitrag</b> = Veränderung × Gewicht des Sektors im Index, in Prozentpunkten (PP). Die Beiträge zusammen ergeben ungefähr die Indexbewegung.</div>
+      <div id="fuss"></div>
+    </footer>
+  </div>
+</div>
+<script>
+"use strict";
+var VERSION = "0.3.0";
+var INTERVALL = 60;            // Sekunden zwischen zwei Abrufen
+var INDEX_SYMBOL = "SPY";
+
+// ---------- GEWICHTE: Anteil jedes Sektors am S&P 500 in Prozent ----------
+// Quelle: S&P Dow Jones Indices, U.S. Sector Dashboard. Etwa monatlich anpassen.
+var GEWICHTE_STAND = "30.09.2026";
+var SEKTOREN = [
+  {symbol: "XLK",  name: "Technologie",       gewicht: 39.9},
+  {symbol: "XLF",  name: "Finanzen",          gewicht: 11.4},
+  {symbol: "XLC",  name: "Kommunikation",     gewicht: 9.7},
+  {symbol: "XLV",  name: "Gesundheit",        gewicht: 9.3},
+  {symbol: "XLY",  name: "Zyklischer Konsum", gewicht: 8.6},
+  {symbol: "XLI",  name: "Industrie",         gewicht: 8.1},
+  {symbol: "XLP",  name: "Basiskonsum",       gewicht: 4.3},
+  {symbol: "XLE",  name: "Energie",           gewicht: 3.4},
+  {symbol: "XLU",  name: "Versorger",         gewicht: 1.9},
+  {symbol: "XLB",  name: "Grundstoffe",       gewicht: 1.7},
+  {symbol: "XLRE", name: "Immobilien",        gewicht: 1.7}
+];
+// --------------------------------------------------------------------------
+
+var SORT_BEITRAG = true, schluessel = null, letzte = null, timer = null, laeuft = false;
+function lies(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function schreib(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
+SORT_BEITRAG = lies("sort") !== "fest";
+schluessel = lies("finnhub_key");
+
+function el(id) { return document.getElementById(id); }
+function zahl(x, st) { return (x > 0 ? "+" : x < 0 ? "−" : "±") + Math.abs(x).toFixed(st).replace(".", ","); }
+function klasse(x) { return x > 0 ? "plus" : x < 0 ? "minus" : ""; }
+function uhr(ms) { return new Date(ms).toLocaleTimeString("de-DE", {hour: "2-digit", minute: "2-digit", second: "2-digit"}); }
+
+// Regulaerer US-Handel Mo-Fr 9:30-16:00 New Yorker Zeit (Feiertage unberuecksichtigt)
+function marktOffen() {
+  var t = new Intl.DateTimeFormat("en-US", {timeZone: "America/New_York", weekday: "short",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23"}).formatToParts(new Date());
+  var w = "", h = 0, m = 0;
+  t.forEach(function (p) { if (p.type === "weekday") w = p.value; if (p.type === "hour") h = +p.value; if (p.type === "minute") m = +p.value; });
+  var min = h * 60 + m;
+  return w !== "Sat" && w !== "Sun" && min >= 570 && min < 960;
+}
+
+var FEHLERTEXT = {
+  401: "Finnhub lehnt den Schlüssel ab",
+  403: "im kostenlosen Zugang nicht freigegeben",
+  429: "Abfragelimit bei Finnhub erreicht"
+};
+// Finnhub-Antwort: c = aktueller Kurs, pc = Vortagesschluss, t = Zeitstempel
+function holeKurs(symbol) {
+  var url = "https://finnhub.io/api/v1/quote?symbol=" + encodeURIComponent(symbol) + "&token=" + encodeURIComponent(schluessel);
+  return fetch(url, {cache: "no-store", credentials: "omit"}).then(function (r) {
+    if (!r.ok) { var e = new Error(FEHLERTEXT[r.status] || ("HTTP " + r.status)); e.code = r.status; throw e; }
+    return r.json();
+  }).then(function (d) {
+    if (!d.c || !d.pc) throw new Error("kein Kurs geliefert");
+    return {kurs: d.c, vortag: d.pc, zeit: d.t || null};
+  });
+}
+
+function berechne(ergebnisse) {
+  var summe = 0, vollstaendig = true, codes = [];
+  var sektoren = SEKTOREN.map(function (s, i) {
+    var e = ergebnisse[i], z = {symbol: s.symbol, name: s.name, gewicht: s.gewicht, veraenderung: null, beitrag: null, fehler: null};
+    if (e.wert) {
+      z.veraenderung = (e.wert.kurs / e.wert.vortag - 1) * 100;
+      z.beitrag = z.veraenderung * s.gewicht / 100;
+      summe += z.beitrag;
+    } else { z.fehler = e.fehler; vollstaendig = false; codes.push(e.code); }
+    return z;
+  });
+  var ie = ergebnisse[SEKTOREN.length], index = {veraenderung: null, stand: null, kurszeit: null, fehler: null};
+  if (ie.wert) {
+    index.veraenderung = (ie.wert.kurs / ie.wert.vortag - 1) * 100;
+    index.stand = ie.wert.kurs; index.kurszeit = ie.wert.zeit;
+  } else { index.fehler = ie.fehler; codes.push(ie.code); }
+  return {abruf: Date.now(), offen: marktOffen(), index: index, sektoren: sektoren,
+    summe: vollstaendig ? summe : null,
+    differenz: vollstaendig && index.veraenderung !== null ? index.veraenderung - summe : null,
+    schluesselAbgelehnt: codes.indexOf(401) >= 0};
+}
+
+function balken(wert, max, art, einheit) {
+  var d = document.createElement("div"); d.className = "balken " + art;
+  var spur = document.createElement("div"); spur.className = "spur";
+  var w = document.createElement("div"); w.className = "wert";
+  if (wert === null) w.textContent = "–";
+  else {
+    var f = document.createElement("div"); f.className = "fuell " + klasse(wert);
+    f.style.width = (max > 0 ? Math.min(50, Math.abs(wert) / max * 50) : 0) + "%";
+    spur.appendChild(f);
+    w.textContent = zahl(wert, 2) + einheit; w.className = "wert " + klasse(wert);
+  }
+  d.appendChild(spur); d.appendChild(w); return d;
+}
+function zeile(name, sym, gew, v, b, maxV, maxB, extra) {
+  var z = document.createElement("div"); z.className = "zeile" + (extra ? " " + extra : "");
+  var n = document.createElement("div"); n.className = "name"; n.textContent = name;
+  var s = document.createElement("small"); s.textContent = sym; n.appendChild(s);
+  var g = document.createElement("div"); g.className = "gew";
+  g.textContent = gew === null ? "" : gew.toFixed(1).replace(".", ",") + " %";
+  z.appendChild(n); z.appendChild(g);
+  z.appendChild(balken(v, maxV, "v", " %"));
+  z.appendChild(balken(b, maxB, "b", " PP"));
+  return z;
+}
+function zeichne(d) {
+  var t = el("tafel"); t.textContent = "";
+  var kopf = document.createElement("div"); kopf.className = "zeile kopf";
+  ["Sektor", "Gewicht", "Veränderung heute", "Beitrag zum Index"].forEach(function (x, i) {
+    var c = document.createElement("div"); c.textContent = x;
+    if (i === 1) c.style.textAlign = "right";
+    if (i > 1) c.className = "balken";
+    kopf.appendChild(c);
+  });
+  t.appendChild(kopf);
+  var sek = d.sektoren.slice();
+  if (SORT_BEITRAG) sek.sort(function (a, b) { return (b.beitrag === null ? -99 : b.beitrag) - (a.beitrag === null ? -99 : a.beitrag); });
+  var iv = d.index.veraenderung;
+  var maxV = Math.max.apply(null, sek.map(function (s) { return Math.abs(s.veraenderung || 0); }).concat([Math.abs(iv || 0), 0.01]));
+  var maxB = Math.max.apply(null, sek.map(function (s) { return Math.abs(s.beitrag || 0); }).concat([Math.abs(iv || 0), 0.01]));
+  sek.forEach(function (s) {
+    var z = zeile(s.name, s.symbol, s.gewicht, s.veraenderung, s.beitrag, maxV, maxB);
+    if (s.fehler) { var f = document.createElement("small"); f.className = "fehler"; f.textContent = " kein Kurs"; z.firstChild.appendChild(f); }
+    t.appendChild(z);
+  });
+  t.appendChild(zeile("S&P 500", "SPY", null, iv, iv, maxV, maxB, "idx"));
+
+  var e = el("idxv");
+  e.textContent = iv === null ? "–" : zahl(iv, 2) + " %";
+  e.style.color = iv > 0 ? "var(--plus)" : iv < 0 ? "var(--minus)" : "";
+  el("idxs").textContent = d.index.stand === null ? "" : "SPY " + d.index.stand.toLocaleString("de-DE", {minimumFractionDigits: 2});
+  el("summe").textContent = d.summe === null ? "" : "Summe der Beiträge: " + zahl(d.summe, 2) + " PP" +
+    (d.differenz === null ? "" : " · Differenz zum Index: " + zahl(d.differenz, 2) + " PP");
+
+  el("punkt").className = "punkt" + (d.offen ? " offen" : "");
+  el("markt").textContent = d.offen ? "US-Markt geöffnet" :
+    "US-Markt geschlossen (regulärer Handel 14:30–21:00 Uhr Lissabon)" +
+    (d.index.kurszeit ? " – Werte vom letzten Handelstag (" + new Date(d.index.kurszeit * 1000).toLocaleDateString("de-DE") + ")" : "");
+  el("status").textContent = "Abruf " + uhr(d.abruf) + " · aktualisiert alle " + INTERVALL + " s";
+  el("fuss").textContent = "Kurse: Finnhub über die SPDR-Sektor-ETFs, Index über SPY. Gewichte Stand " + GEWICHTE_STAND + ". Version " + VERSION + ".";
+
+  var h = el("hinweis"), alle = d.sektoren.concat([d.index]);
+  var mit = alle.filter(function (x) { return x.fehler; });
+  if (d.schluesselAbgelehnt) { h.hidden = false; h.textContent = "Finnhub lehnt den Schlüssel ab. Tippe auf „Schlüssel ändern“ und gib ihn neu ein."; }
+  else if (mit.length === alle.length) { h.hidden = false; h.textContent = "Finnhub liefert gerade keine Kurse (" + mit[0].fehler + "). Die Seite versucht es automatisch weiter."; }
+  else if (mit.length) { h.hidden = false; h.textContent = "Für " + mit.length + " Werte kam kein Kurs (" + mit[0].fehler + "). Die Summe der Beiträge ist deshalb ausgeblendet."; }
+  else h.hidden = true;
+}
+
+function lade() {
+  if (!schluessel || laeuft) return;
+  laeuft = true;
+  var symbole = SEKTOREN.map(function (s) { return s.symbol; }).concat([INDEX_SYMBOL]);
+  Promise.all(symbole.map(function (sym) {
+    return holeKurs(sym).then(function (w) { return {wert: w}; },
+      function (e) { return {wert: null, fehler: e.code ? e.message : "keine Verbindung zu Finnhub", code: e.code || 0}; });
+  })).then(function (erg) {
+    letzte = berechne(erg); zeichne(letzte);
+  }).finally(function () { laeuft = false; });
+}
+function starte() {
+  el("einrichtung").hidden = true; el("inhalt").hidden = false;
+  lade();
+  if (timer) clearInterval(timer);
+  timer = setInterval(function () { if (!document.hidden) lade(); }, INTERVALL * 1000);
+}
+function zeigeEinrichtung() {
+  if (timer) clearInterval(timer);
+  el("inhalt").hidden = true; el("hinweis").hidden = true; el("einrichtung").hidden = false;
+  el("status").textContent = "Noch kein Abruf";
+  el("schluessel").value = "";
+}
+document.addEventListener("visibilitychange", function () {
+  if (!document.hidden && schluessel && (!letzte || Date.now() - letzte.abruf > INTERVALL * 1000)) lade();
+});
+el("einrichtung").addEventListener("submit", function (ev) {
+  ev.preventDefault();
+  var k = el("schluessel").value.trim();
+  if (!k) return;
+  schluessel = k; schreib("finnhub_key", k); starte();
+});
+el("neu").addEventListener("click", function () { schluessel = null; schreib("finnhub_key", null); zeigeEinrichtung(); });
+el("sort").addEventListener("click", function () {
+  SORT_BEITRAG = !SORT_BEITRAG; schreib("sort", SORT_BEITRAG ? "beitrag" : "fest");
+  this.textContent = "Sortierung: " + (SORT_BEITRAG ? "nach Beitrag" : "feste Reihenfolge");
+  if (letzte) zeichne(letzte);
+});
+el("sort").textContent = "Sortierung: " + (SORT_BEITRAG ? "nach Beitrag" : "feste Reihenfolge");
+if (schluessel) starte(); else zeigeEinrichtung();
+</script>
+</body>
+</html>
