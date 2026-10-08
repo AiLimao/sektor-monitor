@@ -8,14 +8,16 @@
 <meta name="robots" content="noindex">
 <title>Sektor-Monitor</title>
 <!--
-  Sektor-Monitor Web v0.3.0
-  Zeigt, welche US-Sektoren den S&P 500 heute bewegen.
-    Veraenderung = Tagesveraenderung des Sektors in Prozent
-    Beitrag      = Veraenderung x Gewicht des Sektors im Index (Prozentpunkte)
+  Sektor-Monitor Web v0.4.0
+  Startseite: Uebersicht der Maerkte (US-ETFs als Stellvertreter fuer die Futures).
+  Klick auf S&P 500 oder Nasdaq 100 oeffnet die Aufschluesselung:
+    Veraenderung = Tagesveraenderung in Prozent
+    Beitrag      = Veraenderung x Gewicht im Index (Prozentpunkte)
   Kurse: Finnhub (finnhub.io), direkt aus dem Browser. Der Zugangsschluessel wird
   einmal je Geraet eingegeben und nur im Browser dieses Geraets gespeichert.
-  Sektoren ueber die SPDR-Sektor-ETFs, Index ueber den ETF SPY.
-  Gewichte: unten im Skript, Abschnitt GEWICHTE.
+  Maerkte und Gewichte: unten im Skript, Abschnitte MAERKTE und ANSICHTEN.
+  Aenderungen v0.4.0: Startseite mit Maerkten; Sektoren-Tabelle als Unterseite von
+  S&P 500; neue Unterseite Nasdaq 100 mit den groessten Aktien und Rest-Balken.
 -->
 <style>
 :root{
@@ -84,12 +86,27 @@ footer{color:var(--leise);font-size:14.5px;margin-top:12px;display:grid;gap:4px}
   .balken.v::before{content:"Veränderung"} .balken.b::before{content:"Beitrag"}
 }
 @media (prefers-reduced-motion: reduce){.fuell{transition:none}}
+.zeile.start{grid-template-columns:minmax(190px,1.3fr) 110px 2.2fr 22px}
+.zeile.klick{cursor:pointer}
+.zeile.klick:hover{background:var(--spur)}
+.zeile.gruppe{display:block;background:var(--bg);color:var(--leise);font-size:13.5px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding-block:8px}
+.pfeil{color:var(--leise);font-size:20px;text-align:right}
+.kurs{font:600 15.5px var(--zahl);text-align:right;font-variant-numeric:tabular-nums}
+a.zurueck{color:var(--text);text-decoration:none;font-size:16px;border:1px solid var(--linie);background:var(--flaeche);border-radius:6px;padding:6px 12px;display:inline-block;margin-top:14px}
+a.zurueck:focus-visible,.zeile.klick:focus-visible{outline:2px solid var(--plus);outline-offset:-2px}
+.zeile.rest{font-style:italic}
+@media (max-width:640px){
+  .zeile.start{grid-template-columns:1fr 90px 22px;gap:4px 8px}
+  .zeile.start .balken{grid-column:1 / -1;grid-row:2}
+  .zeile.start .balken::before{content:none}
+  .zeile.start.kopf .balken{display:none}
+}
 </style>
 </head>
 <body>
 <div class="rahmen">
   <header>
-    <h1>Sektor-Monitor</h1>
+    <h1 id="titel">Sektor-Monitor</h1>
     <div class="status"><span id="punkt" class="punkt"></span><span id="status">Noch kein Abruf</span></div>
   </header>
   <div id="hinweis" class="hinweis" hidden></div>
@@ -103,8 +120,9 @@ footer{color:var(--leise);font-size:14.5px;margin-top:12px;display:grid;gap:4px}
   </form>
 
   <div id="inhalt" hidden>
-    <div class="index">
-      <span class="neben">S&amp;P 500 (über SPY)</span>
+    <a id="zurueck" class="zurueck" href="#" hidden>‹ Übersicht</a>
+    <div class="index" id="kopfzeile" hidden>
+      <span class="neben" id="idxn"></span>
       <span id="idxv" class="gross">–</span>
       <span id="idxs" class="neben"></span>
       <span id="summe" class="neben"></span>
@@ -112,49 +130,82 @@ footer{color:var(--leise);font-size:14.5px;margin-top:12px;display:grid;gap:4px}
     <div class="leiste">
       <span class="status" id="markt"></span>
       <span class="knoepfe">
-        <button id="sort" type="button">Sortierung: nach Beitrag</button>
+        <button id="sort" type="button" hidden>Sortierung: nach Beitrag</button>
         <button id="neu" type="button">Schlüssel ändern</button>
       </span>
     </div>
     <div class="tafel" id="tafel"></div>
     <footer>
-      <div><b>Veränderung</b> = Tagesveränderung des Sektors in Prozent. <b>Beitrag</b> = Veränderung × Gewicht des Sektors im Index, in Prozentpunkten (PP). Die Beiträge zusammen ergeben ungefähr die Indexbewegung.</div>
+      <div id="erklaerung"></div>
       <div id="fuss"></div>
     </footer>
   </div>
 </div>
 <script>
 "use strict";
-var VERSION = "0.3.0";
+var VERSION = "0.4.0";
 var INTERVALL = 60;            // Sekunden zwischen zwei Abrufen
-var INDEX_SYMBOL = "SPY";
 
-// ---------- GEWICHTE: Anteil jedes Sektors am S&P 500 in Prozent ----------
-// Quelle: S&P Dow Jones Indices, U.S. Sector Dashboard. Etwa monatlich anpassen.
-var GEWICHTE_STAND = "30.09.2026";
-var SEKTOREN = [
-  {symbol: "XLK",  name: "Technologie",       gewicht: 39.9},
-  {symbol: "XLF",  name: "Finanzen",          gewicht: 11.4},
-  {symbol: "XLC",  name: "Kommunikation",     gewicht: 9.7},
-  {symbol: "XLV",  name: "Gesundheit",        gewicht: 9.3},
-  {symbol: "XLY",  name: "Zyklischer Konsum", gewicht: 8.6},
-  {symbol: "XLI",  name: "Industrie",         gewicht: 8.1},
-  {symbol: "XLP",  name: "Basiskonsum",       gewicht: 4.3},
-  {symbol: "XLE",  name: "Energie",           gewicht: 3.4},
-  {symbol: "XLU",  name: "Versorger",         gewicht: 1.9},
-  {symbol: "XLB",  name: "Grundstoffe",       gewicht: 1.7},
-  {symbol: "XLRE", name: "Immobilien",        gewicht: 1.7}
+// ---------- MAERKTE: Zeilen der Startseite ----------
+// symbol = US-ETF, der bei Finnhub abgefragt wird; fuer = Future, fuer den er steht;
+// ansicht = Unterseite, die ein Klick oeffnet (siehe ANSICHTEN)
+var MAERKTE = [
+  {gruppe: "Indizes"},
+  {symbol: "SPY", name: "S&P 500", fuer: "MES", ansicht: "spy"},
+  {symbol: "QQQ", name: "Nasdaq 100", fuer: "MNQ", ansicht: "qqq"},
+  {symbol: "RSP", name: "S&P 500 gleichgewichtet", fuer: ""},
+  {gruppe: "Edelmetalle"},
+  {symbol: "GLD", name: "Gold", fuer: "GC"},
+  {symbol: "SLV", name: "Silber", fuer: "SI"}
 ];
+
+// ---------- ANSICHTEN: Aufschluesselung eines Index ----------
+// gewicht = Anteil am Index in Prozent. rest: true = alle nicht genannten Werte
+// erscheinen als ein gemeinsamer Balken (Indexbewegung minus genannte Beitraege).
+var ANSICHTEN = {
+  spy: {titel: "S&P 500", index: "SPY", spalte: "Sektor", rest: false,
+    stand: "30.09.2026, S&P Dow Jones Indices",
+    teile: [
+      {symbol: "XLK",  name: "Technologie",       gewicht: 39.9},
+      {symbol: "XLF",  name: "Finanzen",          gewicht: 11.4},
+      {symbol: "XLC",  name: "Kommunikation",     gewicht: 9.7},
+      {symbol: "XLV",  name: "Gesundheit",        gewicht: 9.3},
+      {symbol: "XLY",  name: "Zyklischer Konsum", gewicht: 8.6},
+      {symbol: "XLI",  name: "Industrie",         gewicht: 8.1},
+      {symbol: "XLP",  name: "Basiskonsum",       gewicht: 4.3},
+      {symbol: "XLE",  name: "Energie",           gewicht: 3.4},
+      {symbol: "XLU",  name: "Versorger",         gewicht: 1.9},
+      {symbol: "XLB",  name: "Grundstoffe",       gewicht: 1.7},
+      {symbol: "XLRE", name: "Immobilien",        gewicht: 1.7}
+    ]},
+  qqq: {titel: "Nasdaq 100", index: "QQQ", spalte: "Aktie", rest: true,
+    stand: "abgerufen 08.10.2026, slickcharts.com",
+    teile: [
+      {symbol: "NVDA",  name: "Nvidia",    gewicht: 13.03},
+      {symbol: "AAPL",  name: "Apple",     gewicht: 11.17},
+      {symbol: "GOOGL", name: "Alphabet",  gewicht: 9.70},   // Klasse A + C zusammen
+      {symbol: "MSFT",  name: "Microsoft", gewicht: 8.94},
+      {symbol: "AMZN",  name: "Amazon",    gewicht: 6.37},
+      {symbol: "SPCX",  name: "SpaceX",    gewicht: 5.02},
+      {symbol: "META",  name: "Meta",      gewicht: 4.18},
+      {symbol: "AVGO",  name: "Broadcom",  gewicht: 4.09},
+      {symbol: "TSLA",  name: "Tesla",     gewicht: 3.39},
+      {symbol: "MU",    name: "Micron",    gewicht: 2.79},
+      {symbol: "AMD",   name: "AMD",       gewicht: 2.40}
+    ]}
+};
 // --------------------------------------------------------------------------
 
-var SORT_BEITRAG = true, schluessel = null, letzte = null, timer = null, laeuft = false;
+var SORT_BEITRAG = true, schluessel = null, letzte = null, timer = null, laeuft = false, ansicht = null;
 function lies(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
 function schreib(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
 SORT_BEITRAG = lies("sort") !== "fest";
 schluessel = lies("finnhub_key");
 
 function el(id) { return document.getElementById(id); }
+function neu(tag, kl, text) { var e = document.createElement(tag); if (kl) e.className = kl; if (text !== undefined) e.textContent = text; return e; }
 function zahl(x, st) { return (x > 0 ? "+" : x < 0 ? "−" : "±") + Math.abs(x).toFixed(st).replace(".", ","); }
+function preis(x) { return x.toLocaleString("de-DE", {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
 function klasse(x) { return x > 0 ? "plus" : x < 0 ? "minus" : ""; }
 function uhr(ms) { return new Date(ms).toLocaleTimeString("de-DE", {hour: "2-digit", minute: "2-digit", second: "2-digit"}); }
 
@@ -180,124 +231,188 @@ function holeKurs(symbol) {
     if (!r.ok) { var e = new Error(FEHLERTEXT[r.status] || ("HTTP " + r.status)); e.code = r.status; throw e; }
     return r.json();
   }).then(function (d) {
-    if (!d.c || !d.pc) throw new Error("kein Kurs geliefert");
-    return {kurs: d.c, vortag: d.pc, zeit: d.t || null};
+    if (!d.c || !d.pc) { var k = new Error("Finnhub kennt das Symbol nicht oder hat keinen Kurs"); k.code = -1; throw k; }
+    return {kurs: d.c, vortag: d.pc, zeit: d.t || null, veraenderung: (d.c / d.pc - 1) * 100};
   });
 }
+function holeAlle(symbole) {
+  return Promise.all(symbole.map(function (sym) {
+    return holeKurs(sym).then(function (w) { return {wert: w}; },
+      function (e) { return {wert: null, fehler: e.code ? e.message : "keine Verbindung zu Finnhub", code: e.code || 0}; });
+  }));
+}
 
-function berechne(ergebnisse) {
-  var summe = 0, vollstaendig = true, codes = [];
-  var sektoren = SEKTOREN.map(function (s, i) {
-    var e = ergebnisse[i], z = {symbol: s.symbol, name: s.name, gewicht: s.gewicht, veraenderung: null, beitrag: null, fehler: null};
-    if (e.wert) {
-      z.veraenderung = (e.wert.kurs / e.wert.vortag - 1) * 100;
-      z.beitrag = z.veraenderung * s.gewicht / 100;
-      summe += z.beitrag;
-    } else { z.fehler = e.fehler; vollstaendig = false; codes.push(e.code); }
+function berechneStart(erg) {
+  var i = 0, zeit = null, fehler = [], codes = [];
+  var zeilen = MAERKTE.map(function (m) {
+    if (m.gruppe) return {gruppe: m.gruppe};
+    var e = erg[i++], z = {symbol: m.symbol, name: m.name, fuer: m.fuer, ansicht: m.ansicht || null, kurs: null, veraenderung: null, fehler: null};
+    if (e.wert) { z.kurs = e.wert.kurs; z.veraenderung = e.wert.veraenderung; zeit = zeit || e.wert.zeit; }
+    else { z.fehler = e.fehler; fehler.push(e.fehler); codes.push(e.code); }
     return z;
   });
-  var ie = ergebnisse[SEKTOREN.length], index = {veraenderung: null, stand: null, kurszeit: null, fehler: null};
-  if (ie.wert) {
-    index.veraenderung = (ie.wert.kurs / ie.wert.vortag - 1) * 100;
-    index.stand = ie.wert.kurs; index.kurszeit = ie.wert.zeit;
-  } else { index.fehler = ie.fehler; codes.push(ie.code); }
-  return {abruf: Date.now(), offen: marktOffen(), index: index, sektoren: sektoren,
-    summe: vollstaendig ? summe : null,
-    differenz: vollstaendig && index.veraenderung !== null ? index.veraenderung - summe : null,
-    schluesselAbgelehnt: codes.indexOf(401) >= 0};
+  return {art: "start", abruf: Date.now(), offen: marktOffen(), zeilen: zeilen, kurszeit: zeit,
+    fehler: fehler, anzahl: i, schluesselAbgelehnt: codes.indexOf(401) >= 0};
+}
+function berechneAnsicht(a, erg) {
+  var summe = 0, gewSumme = 0, fehler = [], codes = [];
+  var teile = a.teile.map(function (s, i) {
+    var e = erg[i], z = {symbol: s.symbol, name: s.name, gewicht: s.gewicht, veraenderung: null, beitrag: null, fehler: null};
+    if (e.wert) { z.veraenderung = e.wert.veraenderung; z.beitrag = z.veraenderung * s.gewicht / 100; summe += z.beitrag; gewSumme += s.gewicht; }
+    else { z.fehler = e.fehler; fehler.push(e.fehler); codes.push(e.code); }
+    return z;
+  });
+  var ie = erg[a.teile.length], index = {veraenderung: null, stand: null, kurszeit: null, fehler: null};
+  if (ie.wert) { index.veraenderung = ie.wert.veraenderung; index.stand = ie.wert.kurs; index.kurszeit = ie.wert.zeit; }
+  else { index.fehler = ie.fehler; fehler.push(ie.fehler); codes.push(ie.code); }
+  var vollstaendig = teile.every(function (t) { return t.beitrag !== null; });
+  var rest = null;
+  if (a.rest && index.veraenderung !== null) {
+    // Rest = alles, was nicht einzeln mit Kurs vorliegt
+    var rg = 100 - gewSumme, rb = index.veraenderung - summe;
+    rest = {symbol: "", name: "Rest (übrige Werte)", gewicht: rg, beitrag: rb, veraenderung: rg > 0 ? rb / rg * 100 : null, fehler: null, rest: true};
+  }
+  return {art: "ansicht", ansicht: a, abruf: Date.now(), offen: marktOffen(), index: index, teile: teile, rest: rest,
+    summe: !a.rest && vollstaendig ? summe : null,
+    differenz: !a.rest && vollstaendig && index.veraenderung !== null ? index.veraenderung - summe : null,
+    fehler: fehler, anzahl: a.teile.length + 1, schluesselAbgelehnt: codes.indexOf(401) >= 0};
 }
 
 function balken(wert, max, art, einheit) {
-  var d = document.createElement("div"); d.className = "balken " + art;
-  var spur = document.createElement("div"); spur.className = "spur";
-  var w = document.createElement("div"); w.className = "wert";
+  var d = neu("div", "balken " + art), spur = neu("div", "spur"), w = neu("div", "wert");
   if (wert === null) w.textContent = "–";
   else {
-    var f = document.createElement("div"); f.className = "fuell " + klasse(wert);
+    var f = neu("div", "fuell " + klasse(wert));
     f.style.width = (max > 0 ? Math.min(50, Math.abs(wert) / max * 50) : 0) + "%";
     spur.appendChild(f);
     w.textContent = zahl(wert, 2) + einheit; w.className = "wert " + klasse(wert);
   }
   d.appendChild(spur); d.appendChild(w); return d;
 }
-function zeile(name, sym, gew, v, b, maxV, maxB, extra) {
-  var z = document.createElement("div"); z.className = "zeile" + (extra ? " " + extra : "");
-  var n = document.createElement("div"); n.className = "name"; n.textContent = name;
-  var s = document.createElement("small"); s.textContent = sym; n.appendChild(s);
-  var g = document.createElement("div"); g.className = "gew";
-  g.textContent = gew === null ? "" : gew.toFixed(1).replace(".", ",") + " %";
-  z.appendChild(n); z.appendChild(g);
-  z.appendChild(balken(v, maxV, "v", " %"));
-  z.appendChild(balken(b, maxB, "b", " PP"));
-  return z;
+function namensfeld(name, klein, fehler) {
+  var n = neu("div", "name", name);
+  if (klein) n.appendChild(neu("small", "", klein));
+  if (fehler) n.appendChild(neu("small", "fehler", " kein Kurs"));
+  return n;
 }
-function zeichne(d) {
-  var t = el("tafel"); t.textContent = "";
-  var kopf = document.createElement("div"); kopf.className = "zeile kopf";
-  ["Sektor", "Gewicht", "Veränderung heute", "Beitrag zum Index"].forEach(function (x, i) {
-    var c = document.createElement("div"); c.textContent = x;
-    if (i === 1) c.style.textAlign = "right";
-    if (i > 1) c.className = "balken";
-    kopf.appendChild(c);
+function kopf(spalten, kl) {
+  var k = neu("div", "zeile kopf" + (kl ? " " + kl : ""));
+  spalten.forEach(function (x) {
+    var c = neu("div", x[1] || "", x[0]);
+    if (x[2]) c.style.textAlign = "right";
+    k.appendChild(c);
   });
-  t.appendChild(kopf);
-  var sek = d.sektoren.slice();
-  if (SORT_BEITRAG) sek.sort(function (a, b) { return (b.beitrag === null ? -99 : b.beitrag) - (a.beitrag === null ? -99 : a.beitrag); });
-  var iv = d.index.veraenderung;
-  var maxV = Math.max.apply(null, sek.map(function (s) { return Math.abs(s.veraenderung || 0); }).concat([Math.abs(iv || 0), 0.01]));
-  var maxB = Math.max.apply(null, sek.map(function (s) { return Math.abs(s.beitrag || 0); }).concat([Math.abs(iv || 0), 0.01]));
-  sek.forEach(function (s) {
-    var z = zeile(s.name, s.symbol, s.gewicht, s.veraenderung, s.beitrag, maxV, maxB);
-    if (s.fehler) { var f = document.createElement("small"); f.className = "fehler"; f.textContent = " kein Kurs"; z.firstChild.appendChild(f); }
-    t.appendChild(z);
-  });
-  t.appendChild(zeile("S&P 500", "SPY", null, iv, iv, maxV, maxB, "idx"));
+  return k;
+}
 
+function zeichneStart(d) {
+  var t = el("tafel"); t.textContent = "";
+  t.appendChild(kopf([["Markt"], ["Kurs", "", true], ["Veränderung heute", "balken"], [""]], "start"));
+  var max = Math.max.apply(null, d.zeilen.map(function (z) { return Math.abs(z.veraenderung || 0); }).concat([0.01]));
+  d.zeilen.forEach(function (z) {
+    if (z.gruppe) { t.appendChild(neu("div", "zeile gruppe", z.gruppe)); return; }
+    var r = neu("div", "zeile start" + (z.ansicht ? " klick" : ""));
+    r.appendChild(namensfeld(z.name, z.symbol + (z.fuer ? " · für " + z.fuer : ""), z.fehler));
+    r.appendChild(neu("div", "kurs", z.kurs === null ? "–" : preis(z.kurs)));
+    r.appendChild(balken(z.veraenderung, max, "v", " %"));
+    r.appendChild(neu("div", "pfeil", z.ansicht ? "›" : ""));
+    if (z.ansicht) {
+      r.tabIndex = 0; r.setAttribute("role", "link"); r.setAttribute("aria-label", z.name + " aufschlüsseln");
+      var geh = function () { location.hash = z.ansicht; };
+      r.addEventListener("click", geh);
+      r.addEventListener("keydown", function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); geh(); } });
+    }
+    t.appendChild(r);
+  });
+  el("erklaerung").textContent = "Die Kurse stammen von US-ETFs, die den jeweiligen Markt abbilden. Sie bewegen sich nur zur US-Börsenzeit. Zeilen mit Pfeil lassen sich antippen und zeigen, welche Sektoren oder Aktien den Index bewegen.";
+  el("fuss").textContent = "Kurse: Finnhub. Version " + VERSION + ".";
+}
+function zeichneAnsicht(d) {
+  var a = d.ansicht, t = el("tafel"); t.textContent = "";
+  t.appendChild(kopf([[a.spalte], ["Gewicht", "", true], ["Veränderung heute", "balken"], ["Beitrag zum Index", "balken"]]));
+  var teile = d.teile.slice();
+  if (SORT_BEITRAG) teile.sort(function (x, y) { return (y.beitrag === null ? -99 : y.beitrag) - (x.beitrag === null ? -99 : x.beitrag); });
+  if (d.rest) teile.push(d.rest);
+  var iv = d.index.veraenderung;
+  var maxV = Math.max.apply(null, teile.map(function (s) { return Math.abs(s.veraenderung || 0); }).concat([Math.abs(iv || 0), 0.01]));
+  var maxB = Math.max.apply(null, teile.map(function (s) { return Math.abs(s.beitrag || 0); }).concat([Math.abs(iv || 0), 0.01]));
+  function zeile(z, extra) {
+    var r = neu("div", "zeile" + (extra ? " " + extra : ""));
+    r.appendChild(namensfeld(z.name, z.symbol, z.fehler));
+    r.appendChild(neu("div", "gew", z.gewicht === null ? "" : z.gewicht.toFixed(1).replace(".", ",") + " %"));
+    r.appendChild(balken(z.veraenderung, maxV, "v", " %"));
+    r.appendChild(balken(z.beitrag, maxB, "b", " PP"));
+    return r;
+  }
+  teile.forEach(function (z) { t.appendChild(zeile(z, z.rest ? "rest" : "")); });
+  t.appendChild(zeile({name: a.titel, symbol: a.index, gewicht: null, veraenderung: iv, beitrag: iv}, "idx"));
+
+  el("idxn").textContent = a.titel + " (über " + a.index + ")";
   var e = el("idxv");
   e.textContent = iv === null ? "–" : zahl(iv, 2) + " %";
   e.style.color = iv > 0 ? "var(--plus)" : iv < 0 ? "var(--minus)" : "";
-  el("idxs").textContent = d.index.stand === null ? "" : "SPY " + d.index.stand.toLocaleString("de-DE", {minimumFractionDigits: 2});
+  el("idxs").textContent = d.index.stand === null ? "" : a.index + " " + preis(d.index.stand);
   el("summe").textContent = d.summe === null ? "" : "Summe der Beiträge: " + zahl(d.summe, 2) + " PP" +
     (d.differenz === null ? "" : " · Differenz zum Index: " + zahl(d.differenz, 2) + " PP");
-
+  el("erklaerung").textContent = "Veränderung = Tagesveränderung in Prozent. Beitrag = Veränderung × Gewicht im Index, in Prozentpunkten (PP)." +
+    (a.rest ? " Rest = Indexbewegung minus die Beiträge der einzeln genannten Werte." : " Die Beiträge zusammen ergeben ungefähr die Indexbewegung.");
+  el("fuss").textContent = "Kurse: Finnhub, Index über " + a.index + ". Gewichte: " + a.stand + ". Version " + VERSION + ".";
+}
+function zeichne(d) {
+  var istStart = d.art === "start";
+  el("titel").textContent = istStart ? "Sektor-Monitor" : "Sektor-Monitor · " + d.ansicht.titel;
+  el("zurueck").hidden = istStart; el("kopfzeile").hidden = istStart; el("sort").hidden = istStart;
+  if (istStart) zeichneStart(d); else zeichneAnsicht(d);
+  var kz = istStart ? d.kurszeit : d.index.kurszeit;
   el("punkt").className = "punkt" + (d.offen ? " offen" : "");
   el("markt").textContent = d.offen ? "US-Markt geöffnet" :
     "US-Markt geschlossen (regulärer Handel 14:30–21:00 Uhr Lissabon)" +
-    (d.index.kurszeit ? " – Werte vom letzten Handelstag (" + new Date(d.index.kurszeit * 1000).toLocaleDateString("de-DE") + ")" : "");
+    (kz ? " – Werte vom letzten Handelstag (" + new Date(kz * 1000).toLocaleDateString("de-DE") + ")" : "");
   el("status").textContent = "Abruf " + uhr(d.abruf) + " · aktualisiert alle " + INTERVALL + " s";
-  el("fuss").textContent = "Kurse: Finnhub über die SPDR-Sektor-ETFs, Index über SPY. Gewichte Stand " + GEWICHTE_STAND + ". Version " + VERSION + ".";
-
-  var h = el("hinweis"), alle = d.sektoren.concat([d.index]);
-  var mit = alle.filter(function (x) { return x.fehler; });
+  var h = el("hinweis"), n = d.fehler.length;
   if (d.schluesselAbgelehnt) { h.hidden = false; h.textContent = "Finnhub lehnt den Schlüssel ab. Tippe auf „Schlüssel ändern“ und gib ihn neu ein."; }
-  else if (mit.length === alle.length) { h.hidden = false; h.textContent = "Finnhub liefert gerade keine Kurse (" + mit[0].fehler + "). Die Seite versucht es automatisch weiter."; }
-  else if (mit.length) { h.hidden = false; h.textContent = "Für " + mit.length + " Werte kam kein Kurs (" + mit[0].fehler + "). Die Summe der Beiträge ist deshalb ausgeblendet."; }
+  else if (n === d.anzahl) { h.hidden = false; h.textContent = "Finnhub liefert gerade keine Kurse (" + d.fehler[0] + "). Die Seite versucht es automatisch weiter."; }
+  else if (n) { h.hidden = false; h.textContent = "Für " + n + (n === 1 ? " Wert" : " Werte") + " kam kein Kurs (" + d.fehler[0] + ")." +
+      (istStart ? "" : d.ansicht.rest ? " Diese Werte stecken im Rest-Balken." : " Die Summe der Beiträge ist deshalb ausgeblendet."); }
   else h.hidden = true;
 }
 
 function lade() {
   if (!schluessel || laeuft) return;
   laeuft = true;
-  var symbole = SEKTOREN.map(function (s) { return s.symbol; }).concat([INDEX_SYMBOL]);
-  Promise.all(symbole.map(function (sym) {
-    return holeKurs(sym).then(function (w) { return {wert: w}; },
-      function (e) { return {wert: null, fehler: e.code ? e.message : "keine Verbindung zu Finnhub", code: e.code || 0}; });
-  })).then(function (erg) {
-    letzte = berechne(erg); zeichne(letzte);
-  }).finally(function () { laeuft = false; });
+  var fuer = ansicht, a = ansicht ? ANSICHTEN[ansicht] : null;
+  var symbole = a ? a.teile.map(function (s) { return s.symbol; }).concat([a.index])
+                  : MAERKTE.filter(function (m) { return m.symbol; }).map(function (m) { return m.symbol; });
+  holeAlle(symbole).then(function (erg) {
+    if (fuer !== ansicht) return;            // inzwischen wurde die Seite gewechselt
+    letzte = a ? berechneAnsicht(a, erg) : berechneStart(erg); zeichne(letzte);
+  }).finally(function () { laeuft = false; if (fuer !== ansicht) lade(); });
+}
+function waehleAnsicht() {
+  var h = location.hash.replace("#", "");
+  ansicht = ANSICHTEN[h] ? h : null;
+  letzte = null;
+  if (!schluessel) return;
+  el("tafel").textContent = ""; el("hinweis").hidden = true;
+  el("zurueck").hidden = !ansicht; el("kopfzeile").hidden = true; el("sort").hidden = !ansicht;
+  el("titel").textContent = ansicht ? "Sektor-Monitor · " + ANSICHTEN[ansicht].titel : "Sektor-Monitor";
+  el("status").textContent = "Lade Kurse …";
+  window.scrollTo(0, 0);
+  lade();
 }
 function starte() {
   el("einrichtung").hidden = true; el("inhalt").hidden = false;
-  lade();
+  waehleAnsicht();
   if (timer) clearInterval(timer);
   timer = setInterval(function () { if (!document.hidden) lade(); }, INTERVALL * 1000);
 }
 function zeigeEinrichtung() {
   if (timer) clearInterval(timer);
   el("inhalt").hidden = true; el("hinweis").hidden = true; el("einrichtung").hidden = false;
-  el("status").textContent = "Noch kein Abruf";
+  el("titel").textContent = "Sektor-Monitor"; el("status").textContent = "Noch kein Abruf";
   el("schluessel").value = "";
 }
+window.addEventListener("hashchange", waehleAnsicht);
 document.addEventListener("visibilitychange", function () {
   if (!document.hidden && schluessel && (!letzte || Date.now() - letzte.abruf > INTERVALL * 1000)) lade();
 });
@@ -311,7 +426,7 @@ el("neu").addEventListener("click", function () { schluessel = null; schreib("fi
 el("sort").addEventListener("click", function () {
   SORT_BEITRAG = !SORT_BEITRAG; schreib("sort", SORT_BEITRAG ? "beitrag" : "fest");
   this.textContent = "Sortierung: " + (SORT_BEITRAG ? "nach Beitrag" : "feste Reihenfolge");
-  if (letzte) zeichne(letzte);
+  if (letzte && letzte.art === "ansicht") zeichne(letzte);
 });
 el("sort").textContent = "Sortierung: " + (SORT_BEITRAG ? "nach Beitrag" : "feste Reihenfolge");
 if (schluessel) starte(); else zeigeEinrichtung();
